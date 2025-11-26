@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Three.js 手势交互粒子系统 (Mobile Fix)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+        canvas { display: block; }
+        
+        /* 关键修复：允许视频在页面内播放，而不是全屏 */
+        #video-input { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            z-index: -1; 
+            opacity: 0;
+            width: 1px;
+            height: 1px;
+        }
+
+        /* UI 面板设计 - 适配手机宽度 */
+        #ui-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 200px;
+            max-width: 40vw;
+            background: rgba(20, 20, 35, 0.7);
+            backdrop-filter: blur(10px);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            z-index: 10;
+            transition: opacity 0.3s;
+        }
+
+        h2 { margin: 0 0 10px 0; font-size: 14px; font-weight: 500; letter-spacing: 1px; }
+
+        .control-group { margin-bottom: 10px; }
+        label { display: block; margin-bottom: 5px; font-size: 12px; color: #ccc; }
+
+        select, input[type="color"] {
+            width: 100%;
+            padding: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: white;
+            outline: none;
+            font-size: 12px;
+        }
+        option { background: #333; }
+
+        #status {
+            font-size: 10px;
+            color: #ff4757;
+            margin-top: 5px;
+            font-weight: bold;
+        }
+        #status.active { color: #2ed573; }
+
+        #start-btn {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 15px 30px;
+            background: #00a8ff;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            font-size: 18px;
+            z-index: 100;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(0, 168, 255, 0.5);
+        }
+
+        #gesture-hint {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            pointer-events: none;
+            text-shadow: 0 1px 2px black;
+        }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <video id="video-input" playsinline webkit-playsinline></video>
+
+    <button id="start-btn">点击开始体验 (需HTTPS)</button>
+
+    <div id="ui-panel">
+        <h2>粒子控制台</h2>
+        <div class="control-group">
+            <select id="shape-select">
+                <option value="heart">❤️ 爱心</option>
+                <option value="saturn">🪐 土星</option>
+                <option value="flower">🌸 花朵</option>
+                <option value="sphere">🔮 球体</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <input type="color" id="color-picker" value="#00ffff">
+        </div>
+        <div id="status">未检测到手部</div>
+    </div>
+
+    <div id="gesture-hint">展示双手：合拢聚合 / 张开扩散</div>
+
+    <script>
+        // --- 1. Three.js 初始化 ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 30;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio > 2 ? 2 : window.devicePixelRatio); // 性能优化
+        document.body.appendChild(renderer.domElement);
+
+        // --- 2. 粒子系统逻辑 ---
+        // 手机端适当减少粒子数以保证流畅度
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const particleCount = isMobile ? 8000 : 15000; 
+        
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const targetPositions = new Float32Array(particleCount * 3);
+        
+        for(let i = 0; i < particleCount * 3; i++) {
+            positions[i] = (Math.random() - 0.5) * 100;
+            targetPositions[i] = positions[i];
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        const material = new THREE.PointsMaterial({
+            color: 0x00ffff,
+            size: isMobile ? 0.3 : 0.15, // 手机上粒子稍微大一点
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        // --- 3. 形状算法 (补全截断部分) ---
+        function getPointOnHeart(t) {
+            const x = 16 * Math.pow(Math.sin(t), 3);
+            const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+            const z = (Math.random() - 0.5) * 5;
+            return { x: x * 0.5, y: y * 0.5, z: z };
+        }
+
+        function getPointOnSphere(u, v, r) {
+            const x = r * Math.sin(u) * Math.cos(v);
+            const y = r * Math.sin(u) * Math.sin(v);
+            const z = r * Math.cos(u);
+            return {x, y, z};
+        }
+
+        function getPointOnSaturn() {
+            if (Math.random() > 0.4) {
+                const u = Math.random() * Math.PI * 2;
+                const v = Math.random() * Math.PI;
+                return getPointOnSphere(v, u, 6);
+            } else {
+                const angle = Math.random() * Math.PI * 2;
+                const r = 10 + Math.random() * 6;
+                return { x: Math.cos(angle) * r, y: (Math.random()-0.5)*0.5, z: Math.sin(angle) * r };
+            }
+        }
+
+        function getPointOnFlower(t) {
+            const k = 4;
+            const r = 10 * Math.cos(k * t);
+            const x = r * Math.cos(t);
+            const y = r * Math.sin(t);
+            const z = (Math.random() - 0.5) * 2;
+            return { x, y, z };
+        }
+
+        let currentShape = 'heart';
+
+        function updateShape(shapeType) {
+            currentShape = shapeType;
+            const timeOffset = Date.now() * 0.001;
+            
+            for (let i = 0; i < particleCount; i++) {
+                let p = {x:0, y:0, z:0};
+                // 简单的参数映射
+                const t = (i / particleCount) * Math.PI * 2 * 10 + timeOffset; 
+                
+                if(shapeType === 'heart') p = getPointOnHeart(t);
+                else if(shapeType === 'sphere') {
+                    const u = Math.random() * Math.PI * 2;
+                    const v = Math.random() * Math.PI;
+                    p = getPointOnSphere(v, u, 8);
+                }
+                else if(shapeType === 'saturn') p = getPointOnSaturn();
+                else if(shapeType === 'flower') p = getPointOnFlower(t);
+                
+                targetPositions[i*3] = p.x;
+                targetPositions[i*3+1] = p.y;
+                targetPositions[i*3+2] = p.z;
+            }
+        }
+
+        // 初始形状
+        updateShape('heart');
+
+        // --- 4. 交互与动画循环 ---
+        let handExpansion = 1.0; // 手势控制的膨胀系数
+        
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const positionsArr = particles.geometry.attributes.position.array;
+            
+            // 缓动动画：将粒子从当前位置移动到目标位置
+            for(let i = 0; i < particleCount * 3; i++) {
+                // 目标位置 * 手势膨胀系数
+                let tx = targetPositions[i] * handExpansion;
+                let ty = targetPositions[i] ? targetPositions[i] * handExpansion : 0; // Fix logic for single index
+                
+                // 修正：我们需要分别处理 x, y, z
+                if (i % 3 === 0) { // x
+                    tx = targetPositions[i] * handExpansion;
+                    positionsArr[i] += (tx - positionsArr[i]) * 0.05;
+                } else if (i % 3 === 1) { // y
+                    let ty = targetPositions[i] * handExpansion;
+                    positionsArr[i] += (ty - positionsArr[i]) * 0.05;
+                } else { // z
+                    let tz = targetPositions[i] * handExpansion;
+                    positionsArr[i] += (tz - positionsArr[i]) * 0.05;
+                }
+            }
+            
+            particles.geometry.attributes.position.needsUpdate = true;
+            particles.rotation.y += 0.002; // 整体旋转
+            renderer.render(scene, camera);
+        }
+        
+        animate();
+
+        // --- 5. MediaPipe 手势识别 ---
+        const videoElement = document.getElementById('video-input');
+        const statusElement = document.getElementById('status');
+        
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1, // 手机端用 1 平衡精度和性能，如果是旧手机可以用 0
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                statusElement.innerText = "已连接手势";
+                statusElement.classList.add('active');
+
+                // 简单的逻辑：如果有两只手，计算两只手食指指尖的距离
+                if (results.multiHandLandmarks.length === 2) {
+                    const hand1 = results.multiHandLandmarks[0][8]; // 食指尖
+                    const hand2 = results.multiHandLandmarks[1][8];
+                    
+                    // 计算距离 (简单的欧几里得距离)
+                    const dist = Math.sqrt(
+                        Math.pow(hand1.x - hand2.x, 2) + 
+                        Math.pow(hand1.y - hand2.y, 2)
+                    );
+                    
+                    // 映射距离到膨胀系数 (0.1 -> 1.0, 0.8 -> 2.5)
+                    handExpansion = 1 + (dist - 0.2) * 2; 
+                    if(handExpansion < 0.5) handExpansion = 0.5;
+                    if(handExpansion > 3) handExpansion = 3;
+                } else {
+                    // 单手，稍微呼吸效果
+                    handExpansion = 1.0 + Math.sin(Date.now()/500) * 0.1;
+                }
+            } else {
+                statusElement.innerText = "未检测到手部";
+                statusElement.classList.remove('active');
+                handExpansion = 1.0; // 复位
+            }
+        }
+
+        // --- 6. 摄像头启动逻辑 (必须由用户点击触发) ---
+        document.getElementById('start-btn').addEventListener('click', async function() {
+            this.style.display = 'none';
+            statusElement.innerText = "正在请求摄像头...";
+
+            // 使用 MediaPipe 的 Camera 工具
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 640,  // 降低分辨率以提高手机性能
+                height: 480,
+                facingMode: 'user' // 强制前置摄像头
+            });
+            
+            try {
+                await cameraUtils.start();
+            } catch(e) {
+                alert("摄像头启动失败：请确保使用HTTPS访问，并允许摄像头权限。\n错误信息: " + e.message);
+                this.style.display = 'block';
+            }
+        });
+
+        // UI 事件
+        document.getElementById('shape-select').addEventListener('change', (e) => {
+            updateShape(e.target.value);
+        });
+
+        document.getElementById('color-picker').addEventListener('input', (e) => {
+            particles.material.color.set(e.target.value);
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
